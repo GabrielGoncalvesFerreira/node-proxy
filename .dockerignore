@@ -1,0 +1,21 @@
+# Docker infra
+docker/
+docker-compose.yml
+
+# Node/Expo
+node_modules
+npm-debug.log
+yarn-error.log
+.expo
+.expo-shared
+
+# Configs e arquivos locais
+.git
+.gitignore
+.DS_Store
+
+# Logs, builds e caches
+*.log
+dist
+build
+coverage

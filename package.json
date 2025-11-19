@@ -1,0 +1,22 @@
+{
+  "name": "proxy-node",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --inspect=0.0.0.0:9229 src/servidor.js",
+    "start": "node src/servidor.js"
+  },
+  
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/http-proxy": "^10.0.0",
+    "@fastify/cookie": "^10.0.0",
+    "@fastify/formbody": "^8.0.0",
+    "axios": "^1.7.0",
+    "redis": "^4.6.13",
+    "lru-cache": "^10.2.0",
+    "undici": "^6.19.8"
+  }
+
+}
