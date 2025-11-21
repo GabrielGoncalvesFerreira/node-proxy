@@ -8,7 +8,7 @@ class AuthService {
   // FLUXO 1: APP (USUÁRIO ERP) - Login com senha + MFA
   // ===========================================================================
 
-  async initiateAppLogin(username, password, scope = 'default') {
+  async initiateAppLogin(username, password, scope = 'default', extraHeaders = {}) {
     const params = new URLSearchParams({
       grant_type: 'password',
       username,
@@ -17,7 +17,7 @@ class AuthService {
     });
 
     const { data } = await httpClient.post(config.api.endpoints.appLogin, params, {
-      headers: { Authorization: `Basic ${config.security.basicAuthHeader}` },
+      headers: { Authorization: `Basic ${config.security.basicAuthHeader}`, ...extraHeaders },
     });
 
     if (!data.challenge_id) {
@@ -40,7 +40,7 @@ class AuthService {
     };
   }
 
-  async finalizeAppLogin(sessionId, code, email) {
+  async finalizeAppLogin(sessionId, code, email, extraHeaders = {}) {
     const session = await sessionService.getSession(sessionId);
     
     if (!session || !session.isPendingMfa) {
@@ -54,11 +54,17 @@ class AuthService {
     });
 
     const { data } = await httpClient.post(config.api.endpoints.appCode, params, {
-      headers: { Authorization: `Basic ${config.security.basicAuthHeader}` },
+      headers: { Authorization: `Basic ${config.security.basicAuthHeader}`, ...extraHeaders },
     });
 
+    const accessToken = data.access_token || data.token;
+
+    if (!accessToken) {
+      throw new Error('Backend não retornou access_token no login final.');
+    }
+
     const finalPayload = {
-      token: data.access_token,
+      token: accessToken,
       user: data.user,
       scope: data.scope,
       tenantId: data.user?.tenant_id, 
@@ -75,18 +81,28 @@ class AuthService {
   // FLUXO 2: ADMIN - Login via Email + Código
   // ===========================================================================
 
-  async initiateAdminLogin(email) {
+  async initiateAdminLogin(email, extraHeaders = {}) {
     const params = new URLSearchParams({ email });
-    await httpClient.post(config.api.endpoints.adminLogin, params);
+    await httpClient.post(config.api.endpoints.adminLogin, params, {
+      headers: extraHeaders
+    });
     return { message: 'Code sent to admin email.' };
   }
 
-  async finalizeAdminLogin(email, code) {
+  async finalizeAdminLogin(email, code, extraHeaders = {}) {
     const params = new URLSearchParams({ email, code });
-    const { data } = await httpClient.post(config.api.endpoints.adminCode, params);
+    const { data } = await httpClient.post(config.api.endpoints.adminCode, params, {
+      headers: extraHeaders
+    });
+
+    const accessToken = data.access_token || data.token;
+
+    if (!accessToken) {
+      throw new Error('Backend não retornou access_token para admin login.');
+    }
 
     const sessionPayload = {
-      token: data.access_token,
+      token: accessToken,
       user: data.user,
       scope: data.scope,
       isAdmin: true,
@@ -102,7 +118,7 @@ class AuthService {
   // FLUXO 3: CLIENT CREDENTIALS (Integrações M2M)
   // ===========================================================================
 
-  async requestClientToken({ clientId, clientSecret, scope = 'default', createSession = false }) {
+  async requestClientToken({ clientId, clientSecret, scope = 'default', createSession = false }, extraHeaders = {}) {
     const finalClientId = clientId || config.security.clientId;
     const finalSecret = clientSecret || config.security.clientSecret;
     
@@ -114,7 +130,7 @@ class AuthService {
     const authHeader = Buffer.from(`${finalClientId}:${finalSecret}`).toString('base64');
 
     const { data } = await httpClient.post(config.api.endpoints.clientToken, params, {
-      headers: { Authorization: `Basic ${authHeader}` },
+      headers: { Authorization: `Basic ${authHeader}`, ...extraHeaders },
     });
 
     if (createSession) {

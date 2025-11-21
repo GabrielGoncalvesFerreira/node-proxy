@@ -3,6 +3,29 @@ import { sessionService } from '../services/session.service.js';
 import { config } from '../config/env.js';
 import { parseAxiosError } from '../utils/error-handler.js';
 
+const AUDITABLE_HEADERS = [
+  'X-Client-Version',
+  'X-Real-IP',
+  'X-Client-IP',
+  'X-BFF-IP',
+  'X-Forwarded-For',
+  'User-Agent'
+];
+
+const toLower = (value = '') => value.toLowerCase();
+
+function extractAuditHeaders(req) {
+  const headers = {};
+  for (const headerName of AUDITABLE_HEADERS) {
+    const lower = toLower(headerName);
+    const value = req.headers[lower] || req.headers[headerName] || req.headers[headerName.toLowerCase()];
+    if (value) {
+      headers[headerName] = value;
+    }
+  }
+  return headers;
+}
+
 class AuthController {
   
   // --- LOGIN APP ---
@@ -15,7 +38,9 @@ class AuthController {
     }
 
     try {
-      const result = await authService.initiateAppLogin(userFinal, password, scope);
+      const auditHeaders = extractAuditHeaders(req);
+      req.log.info({ auditHeaders }, 'Headers enviados ao Laravel');
+      const result = await authService.initiateAppLogin(userFinal, password, scope, auditHeaders);
       this._setCookie(reply, result.sessionId, result.ttl);
       return reply.send({ message: result.message, expires_in: result.ttl });
     } catch (error) {
@@ -33,7 +58,9 @@ class AuthController {
     if (!code) return reply.code(400).send({ message: 'Código é obrigatório.' });
 
     try {
-      const result = await authService.finalizeAppLogin(sessionId, code, email);
+      const auditHeaders = extractAuditHeaders(req);
+      req.log.info({ auditHeaders }, 'Headers enviados ao Laravel');
+      const result = await authService.finalizeAppLogin(sessionId, code, email, auditHeaders);
       this._setCookie(reply, sessionId, config.session.ttlSeconds);
       return reply.send(result);
     } catch (error) {
@@ -49,7 +76,9 @@ class AuthController {
     if (!email) return reply.code(400).send({ message: 'Email é obrigatório.' });
 
     try {
-      const result = await authService.initiateAdminLogin(email);
+      const auditHeaders = extractAuditHeaders(req);
+      req.log.info({ auditHeaders }, 'Headers enviados ao Laravel');
+      const result = await authService.initiateAdminLogin(email, auditHeaders);
       return reply.send(result);
     } catch (error) {
       req.log.error(error);
@@ -63,7 +92,9 @@ class AuthController {
     if (!email || !code) return reply.code(400).send({ message: 'Email e código obrigatórios.' });
 
     try {
-      const result = await authService.finalizeAdminLogin(email, code);
+      const auditHeaders = extractAuditHeaders(req);
+      req.log.info({ auditHeaders }, 'Headers enviados ao Laravel');
+      const result = await authService.finalizeAdminLogin(email, code, auditHeaders);
       this._setCookie(reply, result.sessionId, result.ttl);
       return reply.send({ user: result.user, scope: result.scope });
     } catch (error) {
@@ -79,12 +110,14 @@ class AuthController {
     const wantsSession = req.headers['x-bff-session'] === 'true' || body.bff_session === 'true';
 
     try {
+      const auditHeaders = extractAuditHeaders(req);
+      req.log.info({ auditHeaders }, 'Headers enviados ao Laravel');
       const result = await authService.requestClientToken({
         clientId: body.client_id || body.clientId,
         clientSecret: body.client_secret || body.clientSecret,
         scope: body.scope,
         createSession: wantsSession
-      });
+      }, auditHeaders);
 
       if (wantsSession) {
         this._setCookie(reply, result.sessionId, result.ttl);

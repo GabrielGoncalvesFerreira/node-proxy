@@ -65,13 +65,6 @@ export async function proxyPreHandler(req, reply) {
   // ===========================================================================
   // 2. INJEÇÃO DE DADOS DO CLIENTE (AUDITORIA)
   // ===========================================================================
-  // O Fastify com 'trustProxy: true' já calculou o IP real (req.ip)
-  // ignorando os proxies internos (Docker/Nginx).
-
-  // Envia o IP real para o Laravel saber quem é o cliente original
-  req.headers['x-forwarded-for'] = req.ip;
-  req.headers['x-real-ip'] = req.ip;
-
   // Garante que o User-Agent (Navegador + Versão + SO) seja repassado.
   // Se por algum motivo vier sem (ex: script), definimos um fallback.
   if (!req.headers['user-agent']) {

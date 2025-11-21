@@ -55,6 +55,28 @@ class SessionService {
     await redisClient.del(key);
   }
 
+  /**
+   * Utilitários "raw" usados por fluxos especiais (ex: tickets SSO).
+   * Não aplicamos o prefixo padrão, pois a chave já vem pronta.
+   */
+  async createSessionRaw(key, payload, ttlSeconds) {
+    if (!key) return null;
+    await redisClient.set(key, payload, {
+      EX: ttlSeconds || config.session.ttlSeconds
+    });
+    return { sessionId: key, ttl: ttlSeconds || config.session.ttlSeconds };
+  }
+
+  async getSessionRaw(key) {
+    if (!key) return null;
+    return redisClient.get(key);
+  }
+
+  async removeSessionRaw(key) {
+    if (!key) return;
+    await redisClient.del(key);
+  }
+
   // Helper privado para padronizar a chave no Redis
   _getKey(id) {
     return `sessao:${id}`; // Mantive o prefixo 'sessao:' do seu código original
