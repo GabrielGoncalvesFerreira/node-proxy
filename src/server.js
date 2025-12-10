@@ -18,7 +18,7 @@ setGlobalDispatcher(new Agent({
 
 const app = Fastify({ 
   logger: true,
-  trustProxy: true 
+  trustProxy: ['127.0.0.1', '::1', '172.29.0.1/24'],
 });
 
 // ==================================================================
@@ -93,16 +93,38 @@ app.addHook('onRequest', async (req, reply) => {
   if (!getHeaderValue(req.headers, 'User-Agent')) {
     setHeaderValue(req.headers, 'User-Agent', 'Unknown-Client/1.0');
   }
+
+  // Se o frontend não enviou `X-Client-Version`, preenche com o User-Agent
+  if (!getHeaderValue(req.headers, 'X-Client-Version')) {
+    const ua = getHeaderValue(req.headers, 'User-Agent');
+    if (ua) setHeaderValue(req.headers, 'X-Client-Version', ua);
+  }
 });
 
 // 1. Plugins
 await app.register(formbody);
 await app.register(cookie);
 
+const allowedOrigins = config.cors.allowedOrigins || [];
+const isOriginAllowed = (origin) => allowedOrigins.some((allowed) => allowed === origin);
+
 await app.register(cors, {
-  origin: true, 
+  origin: (origin, cb) => {
+    if (!origin) {
+      // Requisições server-to-server (sem header Origin)
+      return cb(null, true);
+    }
+    if (isOriginAllowed(origin)) {
+      return cb(null, true);
+    }
+    const error = new Error('Origin não autorizada.');
+    error.statusCode = 403;
+    return cb(error);
+  }, 
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['X-CSRF-Token']
 });
 
 // 2. Rotas BFF (Registradas como /api/v1/auth/...)

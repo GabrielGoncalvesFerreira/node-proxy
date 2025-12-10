@@ -1,5 +1,6 @@
 import { authController } from './controllers/auth.controller.js';
 import { sessionController } from './controllers/session.controller.js';
+import { ssoController } from './controllers/sso.controller.js';
 
 export async function registerRoutes(app) {
   // Health Check
@@ -11,15 +12,7 @@ export async function registerRoutes(app) {
   app.post('/api/v1/auth/login', authController.loginAppStep1.bind(authController));
   app.post('/api/v1/auth/login/code', authController.loginAppStep2.bind(authController));
 
-  // Fluxo Admin
-  app.post('/api/admin/auth/login', authController.loginAdminStep1.bind(authController));
-  app.post('/api/admin/auth/verify', authController.loginAdminStep2.bind(authController));
-
-  // Fluxo Client Credentials (Opcional: gera cookie se header x-bff-session existir)
-  app.post('/api/v1/auth/token', authController.getClientToken.bind(authController));
-
   // --- Gestão de Sessão ---
-
   app.get('/bff/session', sessionController.getSessionStatus.bind(sessionController));
 
   // Logout (aceita tanto na rota BFF quanto na rota legada mapeada)
@@ -29,8 +22,8 @@ export async function registerRoutes(app) {
   // --- ROTAS EXCLUSIVAS DO SSO ---
 
   // 1. Gerar Ticket (Privado: Precisa de sessão SSO)
-  app.post('/api/v1/auth/sso/ticket', authController.generateTicket.bind(authController));
+  app.post('/api/v1/auth/sso/ticket', ssoController.generateTicket.bind(ssoController));
 
   // 2. Validar Ticket (Público: BFF Cotação chama)
-  app.post('/api/v1/auth/sso/validate', authController.validateTicket.bind(authController));
+  app.post('/api/v1/auth/sso/validate', ssoController.validateTicket.bind(ssoController));
 }

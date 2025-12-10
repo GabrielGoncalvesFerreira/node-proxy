@@ -55,31 +55,32 @@ class SessionService {
     await redisClient.del(key);
   }
 
-  /**
-   * Utilitários "raw" usados por fluxos especiais (ex: tickets SSO).
-   * Não aplicamos o prefixo padrão, pois a chave já vem pronta.
-   */
-  async createSessionRaw(key, payload, ttlSeconds) {
-    if (!key) return null;
-    await redisClient.set(key, payload, {
-      EX: ttlSeconds || config.session.ttlSeconds
+  async storeTokenMetadata(token, headers = {}, ttlSeconds) {
+    if (!token || !headers) return;
+    const ttl = ttlSeconds || config.session.ttlSeconds;
+    await redisClient.set(this._getTokenMetadataKey(token), JSON.stringify(headers), {
+      EX: ttl
     });
-    return { sessionId: key, ttl: ttlSeconds || config.session.ttlSeconds };
   }
 
-  async getSessionRaw(key) {
-    if (!key) return null;
-    return redisClient.get(key);
+  async getTokenMetadata(token) {
+    if (!token) return null;
+    const data = await redisClient.get(this._getTokenMetadataKey(token));
+    return data ? JSON.parse(data) : null;
   }
 
-  async removeSessionRaw(key) {
-    if (!key) return;
-    await redisClient.del(key);
+  async removeTokenMetadata(token) {
+    if (!token) return;
+    await redisClient.del(this._getTokenMetadataKey(token));
   }
 
   // Helper privado para padronizar a chave no Redis
   _getKey(id) {
     return `sessao:${id}`; // Mantive o prefixo 'sessao:' do seu código original
+  }
+
+  _getTokenMetadataKey(token) {
+    return `tokenmeta:${token}`;
   }
 }
 
