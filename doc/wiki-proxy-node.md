@@ -1,32 +1,51 @@
-| Proxy Node | Versão 1.0.0 |
+| Proxy Node | Versão 1.1.0 |
 | --- | --- |
-| Documentação técnica | Data: 03/02/2025 |
-| Revisão: 1 | |
+| Documentação técnica | Data: 05/02/2025 |
+| Revisão: 2 | |
 
 ---
 
 ## 1. Introdução
 
-O `proxy-node` é um BFF leve escrito com Fastify que centraliza autenticação, cache de tokens `client_credentials` e rotea chamadas para a API Laravel do Controle de Validade. Ele elimina a exposição de `client_id`/`client_secret` nos consumidores e aplica políticas por rota para anexar cabeçalhos de correlação, CORS e tokens apropriados.
+O `proxy-node` é o BFF (Backend for Frontend) responsável por orquestrar autenticação, sessões com cookies HTTP-only e roteamento seguro de chamadas para a API Laravel do Painel Esperança. A aplicação encapsula segredos (`client_id`, `client_secret`), aplica políticas por rota (Basic Auth, sessões de usuário ou pass-through) e oferece endpoints próprios para login SSO/ERP e manutenção de sessão.
 
 ### 1.1. Finalidade
 
-Servir como camada intermediária entre aplicações clientes (web, mobile ou integrações) e o backend Laravel, padronizando autenticação e otimizando latência via keep-alive e cache (memória + Redis).
+Esta documentação serve como guia de manutenção e onboarding técnico. Ela descreve o propósito do BFF, dependências, fluxos de autenticação, configurações sensíveis e pontos de integração necessários para operar o SSO e o painel administrativo.
 
 ### 1.2. Escopo
 
-- Proxy HTTP/HTTPS com Fastify + `@fastify/http-proxy`.
-- Emissão e cache de tokens `client_credentials`.
-- Injeção automática de headers (`x-request-id`, `x-bff`, `Authorization`).
-- Documentação de uso (`AUTH.md`) e políticas (`src/politicas.js`).
+Coberto:
+- Estrutura do projeto `proxy-node`, seus serviços e middlewares.
+- Fluxos de autenticação (SSO, ERP user) e políticas do proxy.
+- Dependências técnicas e requisitos de implantação.
 
-Fora do escopo: alterações no backend Laravel, refresh tokens e monitoramento de infraestrutura (delegado ao cluster Docker).
+Fora do escopo:
+- Funcionalidades do painel frontend (`painel-web`).
+- Implementações internas da API Laravel.
+- Governança de infraestrutura (Kubernetes, monitoramento externo).
 
 ### 1.3. Referências
 
-- Arquivo `AUTH.md` (fluxos de autenticação).
-- Código-fonte em `src/`.
-- Documentação de base do projeto Controle Validade (`controle-validade-app/doc`).
+- `AUTH.md` – exemplos de chamadas de autenticação/SO.
+- `doc/migracao-cookie.md` – estratégia de cookies HTTP-only.
+- `doc/functions.md` – catálogo de serviços e utilitários.
+- RFC 7231 (referência para headers e conteúdo HTTP).
+
+### 1.4. Dependências
+
+- Node.js >= 20, npm >= 10.
+- Redis (armazenamento de sessões e cache de tokens).
+- Certificados CA para comunicação com SSO (opcional via `SSO_CA_PATH`).
+
+```bash
+cd proxy-node
+npm install
+```
+
+### 1.5. Visão Geral
+
+O documento apresenta a arquitetura do proxy, metas e restrições de projeto, visão lógica/processual, requisitos de implantação e um FAQ. As seções foram organizadas para facilitar o diagnóstico rápido e o repasse de conhecimento.
 
 ---
 
@@ -34,137 +53,177 @@ Fora do escopo: alterações no backend Laravel, refresh tokens e monitoramento 
 
 ### 2.1. Estrutura Geral
 
-- `src/servidor.js`: bootstrap do Fastify, registro de plugins (CORS, cookie, formbody), endpoints locais de autenticação (`/api/v1/auth/token`, `/api/v1/auth/token/erp`), proxy e hooks.
-- `src/politicas.js`: roteamento de políticas (`passthrough`, `token_basic_proxy`, `sessao_usuario`, `oauth_client_credentials`).
-- `src/cache-de-token.js`: cache multi-tier (LRU + Redis) para tokens `client_credentials`, com invalidação no `onResponse`.
-- `src/sessoes.js`: CRUD de sessões ERP (JWT por usuário) no Redis.
-- `AUTH.md`: guia de consumo dos endpoints de autenticação e sessão.
+- **Front-end:** painel React (`painel-web`), consome o BFF via Axios.
+- **Back-end:** Fastify 5 com plugins `cors`, `cookie`, `formbody` e `@fastify/http-proxy`.
+- **Módulos principais:**
+  - `src/server.js` – bootstrap, registro dos plugins e configuração do proxy.
+  - `src/routes.js` – rotas internas (`/auth/api/...`) pertencentes ao BFF.
+  - `src/controllers/*` – controladores para login SSO, sessão, ticket, etc.
+  - `src/services/*` – regras de negócio: autenticação, sessão Redis, CSRF.
+  - `src/proxy/middleware.js` – políticas por rota e injeção de headers/IP.
 
-### 2.2. Padrões e Práticas
+### 2.2. Padrões de Design e Práticas de Desenvolvimento
 
-- Módulos ES (`"type": "module"` no `package.json`).
-- `undici` como HTTP client global (melhor suporte HTTP/1.1 keep-alive).
-- Funções puras para políticas, facilitando testes.
-- CORS restrito a `localhost/127.0.0.1` (ajustável por ambiente).
-- Node.js v20 (alinhado ao container Docker).
+- Código em módulos ES, lint e formatação alinhados ao padrão do repositório.
+- Camada de serviço separada da camada HTTP.
+- Uso de `undici` com dispatcher global para garantir keep-alive e TLS consistente.
+- Logs estruturados via `fastify.log`.
 
-### 2.3. Integrações
+### 2.3. Integração de Sistemas
 
-- API Laravel (base configurada via `API_BASE`).
-- Servidor OAuth (mesma API, endpoint `OAUTH_TOKEN_URL`).
-- Redis (cache distribuído, `REDIS_URL`).
+- **API Laravel:** destino principal de todas as rotas proxied.
+- **SSO interno:** endpoints `/api/v1/auth/sso/*` via `authService`.
+- **Redis:** sessões de usuário (`cv_session`), refresh tokens e cache de tokens ERP.
+
+### 2.4. Manutenibilidade e Escalabilidade
+
+- Políticas configuradas em `proxyPreHandler` permitem adicionar rotas sem duplicar lógica.
+- Sessões e tokens ficam no Redis, facilitando escalonar múltiplos pods do BFF.
+- Configurações sensíveis isoladas em `src/config/env.js`, lidas via `process.env`.
+
+### 2.5. Regras de Negócio
+
+- Session ID deve ser um UUID v4; IP e User-Agent precisam casar com o salvamento original.
+- Endpoint `/auth/api/admin/auth/login` usa CSRF + SSO e não passa pelo proxy com Basic.
+- Toda rota mutável requer header `X-CSRF-Token` combinando com cookie `cv_csrf`.
 
 ---
 
-## 3. Metas e Restrições
+## 3. Metas e Restrições da Arquitetura
 
-| Objetivo | Descrição |
+### 3.1. Usabilidade
+
+| Requisito | Descrição |
 | --- | --- |
-| Segurança | Segredos permanecem no proxy; clientes recebem apenas tokens emitidos. |
-| Desempenho | Tokens reutilizados via cache; keep-alive reduz criação de conexões a cada chamada. |
-| Observabilidade | `x-request-id` aplicado antes de encaminhar qualquer requisição. |
-| Simplicidade | Políticas declarativas por rota, sem necessidade de alterar o proxy para cada novo módulo. |
+| Mensagens | Logs Fastify (`info/warn/error`) e respostas JSON padronizadas (`message`). |
+| Interação | API HTTP (JSON/Form), sem UI própria. |
+| Manual | Esta wiki + `AUTH.md`. |
+| Acesso | HTTP(s) via gateway corporativo; rotas internas prefixadas com `/auth`. |
 
-Restrições: depende de Redis; se indisponível, apenas cache em memória estará ativo. TLS é fornecido pela camada externa (reverse proxy/Ingress).
+### 3.2. Confiabilidade
+
+| Requisito | Descrição |
+| --- | --- |
+| Disponibilidade | 99% (dependente do cluster Docker/Kubernetes). |
+| Desempenho | Proxy adiciona <10 ms de latência média. |
+| Integridade | Sessões travadas a IP/UA; CSRF em toda mutação. |
+| Segurança | Segredos permanecem no BFF; tokens ERP nunca expostos. |
+| Escalabilidade | Stateless (com Redis) – suporta horizontal scaling. |
+
+### 3.3. Desenvolvimento
+
+| Requisito | Descrição |
+| --- | --- |
+| Linguagem | Node.js 20 (ESM). |
+| Banco | Redis 6+ (cache/sessões). |
+| Frameworks | Fastify 5, Undici, Axios. |
+| IDE | Livre (VS Code recomendado). |
 
 ---
 
 ## 4. Visão Lógica
 
-Fluxo básico:
-
-1. Cliente faz requisição para o proxy (`/api/v1/...`).
-2. `servidor.js` aplica headers (`x-request-id`, `x-bff`) e consulta `escolherPolitica`.
-3. Política resultante:
-   - `sessao_usuario`: padrão para rotas autenticadas; lê `cv_session`, busca o JWT ERP **ou** client_credentials no Redis (`sessoes.js`) e injeta `Authorization: Bearer ...`.
-   - `oauth_client_credentials`: usado apenas para rotas específicas (ex.: `/v1/system/**`), obtendo tokens do cache `obterTokenCliente`.
-   - `passthrough`: repassa a requisição sem alterações adicionais.
-4. `@fastify/http-proxy` encaminha para `API_BASE`.
-
-Fluxos especiais (antes do proxy):
-
-- `POST /api/v1/auth/token/erp`: sempre cria sessão por usuário ERP (cookie HTTP-only).
-- `POST /api/v1/auth/token`: devolve `access_token` normalmente; se o cliente enviar `x-bff-session: true` ou `bff_session=true`, o BFF cria a sessão atrelada ao `client_id` e omite o token na resposta.
-
-Fluxo de cache (`obterTokenCliente`):
-
-1. Concatena `tenantId`, `audiencia` e `escopos` como chave.
-2. Consulta `LRUCache` (memória) e depois Redis.
-3. Caso ambos falhem ou estejam próximos de expirar (30 s), solicita novo token em `OAUTH_TOKEN_URL`.
-4. Salva no Redis (PX `expires_in`) e na LRU, liberando lock distribuído.
-5. Se o backend responder `401`, o `onResponse` remove a entrada em cache forçando renovação no próximo chamado.
+- `app.addHook('onRequest')`: normaliza headers, UA e IP.
+- `registerRoutes` expõe rotas próprias (`/auth/api/...`) com controles CSRF/sessão.
+- `@fastify/http-proxy` intercepta tudo que não foi tratado localmente e reescreve `/auth/*` -> `/`.
+- `proxyPreHandler` decide política (`passthrough`, `basic_auth`, `user_session`), injeta headers e verifica CSRF.
+- `replyOptions.onResponse` monitora códigos de erro e dispara callbacks (ex.: validação ERP após `/api/v1/auth/token`).
 
 ---
 
-## 5. Dependências
+## 5. Visão do Processo
 
-| Pacote | Versão | Uso |
-| --- | --- | --- |
-| `fastify` | ^5.0.0 | Servidor HTTP principal. |
-| `@fastify/http-proxy` | ^10.0.0 | Proxy reverso para API Laravel. |
-| `@fastify/cors` | ^10.0.0 | Controle de origem dos clientes. |
-| `@fastify/cookie` | ^9.3.0 | Gestão de cookies HTTP-only para sessões ERP. |
-| `@fastify/formbody` | ^8.1.0 | Parser de `application/x-www-form-urlencoded` nos endpoints de login. |
-| `axios` | ^1.7.0 | Solicita tokens ao Authorization Server. |
-| `redis` | ^4.6.13 | Cache distribuído. |
-| `lru-cache` | ^10.2.0 | Cache em memória. |
-| `undici` | ^6.19.8 | Dispatcher global com keep-alive. |
+### 5.1. Processos Operacionais
 
-Node >= 20 e npm >= 10 recomendados.
+- **Fluxo de Login SSO:** cliente chama `/auth/api/admin/auth`, valida ticket, cria sessão + refresh cookie + CSRF. Após isso, todas as chamadas proxied usam `Authorization: Bearer <sessionId>`.
+- **Fluxo de Sessão:** endpoints `/auth/api/bff/session|refresh|logout` manipulam sessões no Redis e garantem fingerprint/IP.
+- **Proxy:** rotas não locais respeitam as políticas definidas em `proxy/middleware.js`.
+
+| Entidade/Tabela | Data Source | Banco | Observações |
+| --- | --- | --- | --- |
+| Sessão (`cv_session:<uuid>`) | Prod/Homol | Redis | Guarda token ERP, IP, UA, TTL. |
+| Refresh Token (`cv_refresh:<uuid>`) | Prod/Homol | Redis | Referencia sessão ativa + metadados. |
+
+### 5.2. Manutenção e Monitoramento
+
+- Logs acessíveis via stdout/aggregator (ELK/CloudWatch).
+- Falhas em Redis/token ERP produzem `warn/error` no log.
+- Health-check disponível em `GET /auth/health`.
 
 ---
 
-## 6. Configuração e Execução
+## 6. Implantação
 
-### 6.1. Variáveis de Ambiente
+### 6.1. Máquina
 
-| Variável | Descrição |
+| Requisito | Descrição |
 | --- | --- |
-| `PORT` | Porta do proxy (default 5180). |
-| `API_BASE` | URL base da API Laravel (ex.: `http://backend:4000`). |
-| `OAUTH_TOKEN_URL` | Endpoint OAuth (normalmente `${API_BASE}/api/v1/auth/token`). |
-| `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | Credenciais do aplicativo. |
-| `REDIS_URL` | Conexão Redis (ex.: `redis://redis:6379`). |
-| `SESSION_COOKIE_NAME` | Nome do cookie HTTP-only (default `cv_session`). |
-| `SESSION_COOKIE_DOMAIN` | Domínio opcional para o cookie. |
-| `SESSION_COOKIE_SECURE` | Define se o cookie será `Secure` (`true` por padrão). |
-| `SESSION_COOKIE_SAMESITE` | `lax` (default), `strict` ou `none`. |
-| `SESSION_TTL_SECONDS` | TTL mínimo das sessões quando o backend não retornar `expires_in`. |
+| SO | Linux (containers). |
+| Memória | 512 MB+ (processo Node) + Redis dedicado. |
+| CPU | 1 vCPU+. |
+| Disco | 200 MB para dependências + logs em stdout. |
 
-### 6.2. Comandos
+### 6.2. Pré-requisitos
+
+| Requisito | Descrição |
+| --- | --- |
+| Node.js | >=20, disponível no container. |
+| Redis | Instância acessível via rede privada. |
+| Variáveis de ambiente | Configuradas conforme `src/config/env.js`. |
+
+### 6.3. Instalação
 
 ```bash
 cd proxy-node
-npm install
+npm ci
+npm run build   # se existir etapa de build
 npm start
 ```
 
-Para desenvolvimento, use `npm run dev` (se configurado) ou `node --watch src/servidor.js`.
+### 6.4. Configurações
+
+`.env` (exemplo):
+
+```
+PORT=5180
+API_BASE=https://api-esperanca.internal
+SSO_API_URL=https://sso.internal
+REDIS_URL=redis://redis:6379
+SESSION_COOKIE_DOMAIN=.comlesperanca.com.br
+```
+
+`config/env.js` já converte as variáveis para objetos consumidos pelos serviços.
 
 ---
 
-## 7. Operação e Monitoramento
+## 7. Tamanho e Desempenho
 
-- Logs Fastify (`app = Fastify({ logger: true })`) gravam cada requisição proxied.
-- `x-request-id` permite rastrear chamadas ponta a ponta entre clientes, proxy e Laravel.
-- Redis é crítico para cache de tokens **e** sessões ERP/client_credentials; monitore conexões, tempo de resposta e memória disponível.
-- Hooks `onResponse` limpam sessões/caches em `401`, evitando que tokens inválidos persistam. Exponha métricas dessas ocorrências no Grafana.
-- Sugerido expor `/health` para probes do orchestrator (já implementado).
-
----
-
-## 8. Próximas Evoluções
-
-1. Suporte a refresh tokens/PKCE quando o backend disponibilizar.
-2. Ajustar CORS para domínios corporativos (variável de ambiente).
-3. Telemetria (OpenTelemetry/Log aggregation).
-4. Implementar circuit breaker/retry nas chamadas ao upstream para cenários de instabilidade.
+| Requisito | Descrição |
+| --- | --- |
+| Tempo de resposta | ~5–10 ms adicionais ao backend. |
+| Capacidade | 2k req/min por instância (limitado por upstream). |
+| Transferência | Governada pelo gateway; proxy apenas repassa streams. |
 
 ---
 
-## 9. Apêndices
+## 8. Qualidade
 
-- `AUTH.md`: detalha chamadas e exemplos Httpie (incluindo o novo cookie HTTP-only).
-- `doc/migracao-cookie.md`: passo a passo para remover o uso de `localStorage` nos clients.
-- `docker/docker-compose.yml` (quando existir) pode ser utilizado para subir Redis + proxy localmente.
-- Para diagramas Visio/draw.io, reutilizar este conteúdo textual como base; anexar os artefatos finais em `doc/`.
+- Código modularizado em controllers/services.
+- Proteções de segurança (CSRF, fingerprint de sessão, IP/UA) já documentadas.
+- Testes manuais via Httpie/Insomnia (ver `AUTH.md`).
+
+---
+
+## 9. Perguntas Frequentes
+
+1. **Por que preciso enviar `X-CSRF-Token` se já tenho o cookie?**  
+   Para bloquear CSRF via double-submit cookie; apenas o frontend legítimo consegue copiar o valor para o header.
+
+2. **Como desbloquear uma sessão travada por fingerprint?**  
+   Remova o registro Redis (`cv_session:<id>`) e peça ao usuário para logar novamente.
+
+3. **Onde configuro CORS?**  
+   Variável `CORS_ORIGINS` (lista separada por vírgula) lida em `src/server.js`.
+
+4. **O proxy altera paths?**  
+   Sim, todos os caminhos entram com `/auth` e são reescritos para `/` antes de chegar ao Laravel; mantenha o prefixo nos clients ou configure o gateway externo para reescrever.

@@ -10,6 +10,13 @@ import { config } from './config/env.js';
 import { registerRoutes } from './routes.js';
 import { proxyPreHandler } from './proxy/middleware.js'; // Removido normalizeApiPath, não precisa mais aqui
 
+const allowedOrigins = config.cors.allowedOrigins || [];
+const isOriginAllowed = (origin) => allowedOrigins.some((allowed) => allowed === origin);
+
+const trustedIps = Array.isArray(config.proxy.trustProxy) 
+  ? config.proxy.trustProxy 
+  : (config.proxy.trustProxy ? config.proxy.trustProxy.split(',').map(i => i.trim()) : []);
+
 // Otimização de conexões HTTP
 setGlobalDispatcher(new Agent({
   keepAliveTimeout: 10_000,
@@ -18,7 +25,26 @@ setGlobalDispatcher(new Agent({
 
 const app = Fastify({ 
   logger: true,
-  trustProxy: ['127.0.0.1', '::1', '172.29.0.1/24'],
+  trustProxy: trustedIps,
+});
+
+await app.register(cors, {
+    origin: (origin, cb) => {
+    if (!origin) {
+      // Requisições server-to-server (sem header Origin)
+      return cb(null, true);
+    }
+    if (isOriginAllowed(origin)) {
+      return cb(null, true);
+    }
+    const error = new Error('Origin não autorizada.');
+    error.statusCode = 403;
+    return cb(error);
+  }, 
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['X-CSRF-Token']
 });
 
 // ==================================================================
@@ -52,24 +78,15 @@ const setHeaderValue = (headers, name, value) => {
 };
 
 app.addHook('onRequest', async (req, reply) => {
-  // --- A. Normalização de URL ---
-  // Corrige /v1 -> /api/v1 para roteamento interno
-  let currentUrl = req.raw.url;
-  // Remove query string para checar o path
-  const [rawPath, query] = currentUrl.split('?');
+
+  const connectionIp = req.raw.socket.remoteAddress?.replace('::ffff:', '');
+
+  // Usa a variável 'trustedIps' que garantimos ser um Array lá em cima
+  if (trustedIps.length > 0 && !trustedIps.includes(connectionIp)) {
+    req.log.warn(`[FIREWALL] Bloqueado: ${connectionIp}`);
+    return reply.code(403).send({ message: 'Bloqueado pelo proxy (IP não autorizado).', error: 'Forbidden' });
+  }
   
-  let newPath = rawPath;
-  if (!newPath.startsWith('/api')) {
-    newPath = newPath.startsWith('/') ? `/api${newPath}` : `/api/${newPath}`;
-  }
-  newPath = newPath.replace(/^\/api\/api/, '/api'); // Evita duplicidade
-
-  const finalUrl = query ? `${newPath}?${query}` : newPath;
-
-  if (currentUrl !== finalUrl) {
-    req.raw.url = finalUrl; 
-    // req.log.info(`https://ahrefs.com/writing-tools/paragraph-rewriter ${currentUrl} -> ${finalUrl}`);
-  }
 
   // --- B. Injeção de Headers de Auditoria (Laravel precisa disso) ---
   setHeaderValue(req.headers, 'X-Request-Id', getHeaderValue(req.headers, 'X-Request-Id') || crypto.randomUUID());
@@ -101,48 +118,70 @@ app.addHook('onRequest', async (req, reply) => {
   }
 });
 
-// 1. Plugins
+
 await app.register(formbody);
 await app.register(cookie);
 
-const allowedOrigins = config.cors.allowedOrigins || [];
-const isOriginAllowed = (origin) => allowedOrigins.some((allowed) => allowed === origin);
 
-await app.register(cors, {
-  origin: (origin, cb) => {
-    if (!origin) {
-      // Requisições server-to-server (sem header Origin)
-      return cb(null, true);
-    }
-    if (isOriginAllowed(origin)) {
-      return cb(null, true);
-    }
-    const error = new Error('Origin não autorizada.');
-    error.statusCode = 403;
-    return cb(error);
-  }, 
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With', 'Accept'],
-  exposedHeaders: ['X-CSRF-Token']
-});
 
 // 2. Rotas BFF (Registradas como /api/v1/auth/...)
-await registerRoutes(app);
+await app.register(registerRoutes, { prefix: '/auth' });
 
 // 3. Proxy Reverso (Catch-all para o Laravel)
 await app.register(proxy, {
   upstream: config.api.baseUrl,
-  prefix: '/',
+  prefix: '/auth',
   httpMethods: ['DELETE', 'GET', 'HEAD', 'PATCH', 'POST', 'PUT'],
-  preHandler: proxyPreHandler,
+  preHandler: async (req, reply) => {
+  // 1. Executa middleware de lógica de negócio (se existir no arquivo)
+  if (proxyPreHandler) await proxyPreHandler(req, reply);
+
+  // 2. CORREÇÃO CRÍTICA: Re-serializa o body para o Proxy aceitar
+  if (
+    req.body &&
+    typeof req.body === 'object' &&
+    !Buffer.isBuffer(req.body) &&
+    typeof req.body.pipe !== 'function'
+  ) {
+    const contentType = req.headers['content-type'] || '';
+    
+    if (contentType.includes('application/json')) {
+      req.body = JSON.stringify(req.body);
+    } else if (contentType.includes('application/x-www-form-urlencoded')) {
+      req.body = new URLSearchParams(req.body).toString();
+    }
+    
+    // Deleta o content-length antigo para evitar erros de tamanho
+    delete req.headers['content-length'];
+  }
+},
   
   replyOptions: {
     onResponse: (req, reply, res) => {
       if (reply.statusCode >= 400) {
         req.log.warn(`[Proxy Status] ${reply.statusCode} para ${req.url}`);
       }
-      reply.send(res);
+
+      if (res?.headers) {
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (value !== undefined) {
+            reply.header(key, value);
+          }
+        }
+      }
+
+      reply.code(res?.statusCode || reply.statusCode);
+      if (res?.stream) {
+        reply.send(res.stream);
+        return;
+      }
+
+      if (res && typeof res.pipe === 'function') {
+        reply.send(res);
+        return;
+      }
+
+      reply.send(null);
     }
   }
 });

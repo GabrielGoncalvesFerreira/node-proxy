@@ -16,6 +16,7 @@ class AuthService {
   async initiateAppLogin(username, password, scope = 'default', extraHeaders = {}, clientContext = {}) {
     const params = new URLSearchParams({
       grant_type: 'password',
+      email: username,
       username,
       password,
       scope,

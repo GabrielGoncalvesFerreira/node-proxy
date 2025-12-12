@@ -4,13 +4,15 @@ import { extractAuditHeaders } from '../utils/audit-headers.js';
 import { csrfService } from '../services/csrf.service.js';
 import { extractClientContext } from '../utils/client-context.js';
 import { requireSessionToken } from '../utils/session-token.js';
+import { sessionService } from '../services/session.service.js';
+import { config } from '../config/env.js';
 
 class AuthController {
   
   // --- LOGIN APP ---
   async loginAppStep1(req, reply) {
-    const { username, login, password, scope } = req.body || {};
-    const userFinal = username || login;
+    const { email, username, login, password, scope } = req.body || {};
+    const userFinal = username || login || email;
 
     if (!userFinal || !password) {
       return reply.code(400).send({ message: 'Campos obrigatórios: username e password.' });
@@ -65,9 +67,25 @@ class AuthController {
       );
       const { ttl, ...payload } = result;
       csrfService.issueToken(reply, ttl);
+
+      const refreshTtl = config.session.refreshTtlSeconds;
+      const { refreshId } = await sessionService.createRefreshToken(sessionToken, refreshTtl, {
+        clientContext
+      });
+      reply.setCookie(config.session.refreshCookieName, refreshId, {
+        httpOnly: true,
+        secure: config.session.secure,
+        sameSite: config.session.sameSite,
+        domain: config.session.domain,
+        path: '/',
+        maxAge: refreshTtl
+      });
+
       return reply.send({
         ...payload,
         session_token: sessionToken,
+        refresh_token: refreshId,
+        token_type: 'Bearer',
         expires_in: ttl
       });
     } catch (error) {

@@ -5,23 +5,6 @@ import { csrfService } from '../services/csrf.service.js';
 import { extractSessionToken } from '../utils/session-token.js';
 import { extractClientContext, hasSameClientContext } from '../utils/client-context.js';
 
-// Normaliza a URL para garantir que sempre comece com /api ao chegar no Laravel
-export function normalizeApiPath(url) {
-  // Separa path da query string (ex: ?id=1)
-  const [rawPath, query] = url.split('?');
-  let path = rawPath;
-
-  // 1. Se não começa com /api, adiciona.
-  // Ex: /v1/auth -> /api/v1/auth
-  if (!path.startsWith('/api')) {
-    path = path.startsWith('/') ? `/api${path}` : `/api/${path}`;
-  }
-
-  // 2. Segurança: Remove duplicação se houver (ex: /api/api/v1 -> /api/v1)
-  path = path.replace(/^\/api\/api/, '/api');
-
-  return query ? `${path}?${query}` : path;
-}
 
 // Define qual política de segurança aplicar baseada na rota
 function getPolicy(path, method) {
@@ -31,10 +14,8 @@ function getPolicy(path, method) {
   }
 
   const basicAuthRoutes = [
-    '/api/v1/auth/login',
-    '/api/v1/auth/login/code',
-    '/api/auth/login',
-    '/api/auth/login/code'
+    config.url.loginUrl,
+    config.url.loginCodeUrl
   ];
 
   if (basicAuthRoutes.some(route => path.startsWith(route))) {
@@ -63,8 +44,8 @@ export async function proxyPreHandler(req, reply) {
   }
   // ===========================================================================
 
-  const normalizedPath = normalizeApiPath(req.raw.url || req.url);
-  const policy = getPolicy(normalizedPath, req.method);
+  const currentPath = req.raw.url.split('?')[0];
+  const policy = getPolicy(currentPath, req.method);
 
   if (policy.type === 'passthrough') return;
 
@@ -112,5 +93,4 @@ export async function proxyPreHandler(req, reply) {
     return;
   }
 
-  // Demais políticas não utilizadas
 }
