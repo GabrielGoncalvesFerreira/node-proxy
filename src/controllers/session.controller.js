@@ -1,7 +1,7 @@
 import { sessionService } from '../services/session.service.js';
 import { csrfService } from '../services/csrf.service.js';
 import { extractClientContext, hasSameClientContext } from '../utils/client-context.js';
-import { requireSessionToken } from '../utils/session-token.js';
+import { requireSessionToken, clearSessionCookie, buildSessionCookieOptions } from '../utils/session-token.js';
 import { config } from '../config/env.js';
 
 class SessionController {
@@ -22,6 +22,7 @@ class SessionController {
     if (!session) {
       // Cookie existe mas não tá no Redis (expirou ou Redis caiu)
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ authenticated: false });
     }
 
@@ -35,6 +36,7 @@ class SessionController {
       }, '[Session Guard] Fingerprint inválido para sessão.');
       await sessionService.removeSession(sessionId);
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ authenticated: false, message: 'Sessão bloqueada. Faça login novamente.' });
     }
 
@@ -78,6 +80,7 @@ class SessionController {
         domain: config.session.domain
       });
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ message: 'Refresh inválido ou expirado.' });
     }
 
@@ -89,6 +92,7 @@ class SessionController {
         domain: config.session.domain
       });
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ message: 'Sessão expirada.' });
     }
 
@@ -107,6 +111,7 @@ class SessionController {
         path: '/',
         domain: config.session.domain
       });
+      clearSessionCookie(reply);
       return reply.code(401).send({ message: 'Sessão bloqueada. Faça login novamente.' });
     }
 
@@ -132,6 +137,7 @@ class SessionController {
       path: '/',
       maxAge: refreshTtl
     });
+    reply.setCookie(config.session.cookieName, sessionId, buildSessionCookieOptions(ttl));
 
     csrfService.ensureToken(req, reply, ttl);
 
@@ -168,6 +174,7 @@ class SessionController {
       path: '/',
       domain: config.session.domain
     });
+    clearSessionCookie(reply);
     csrfService.clear(reply);
     return reply.send({ authenticated: false });
   }

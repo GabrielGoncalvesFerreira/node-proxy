@@ -3,7 +3,7 @@ import { parseAxiosError } from '../utils/error-handler.js';
 import { extractAuditHeaders } from '../utils/audit-headers.js';
 import { csrfService } from '../services/csrf.service.js';
 import { extractClientContext } from '../utils/client-context.js';
-import { requireSessionToken } from '../utils/session-token.js';
+import { requireSessionToken, buildSessionCookieOptions } from '../utils/session-token.js';
 import { sessionService } from '../services/session.service.js';
 import { config } from '../config/env.js';
 
@@ -67,6 +67,7 @@ class AuthController {
       );
       const { ttl, ...payload } = result;
       csrfService.issueToken(reply, ttl);
+      reply.setCookie(config.session.cookieName, sessionToken, buildSessionCookieOptions(ttl));
 
       const refreshTtl = config.session.refreshTtlSeconds;
       const { refreshId } = await sessionService.createRefreshToken(sessionToken, refreshTtl, {

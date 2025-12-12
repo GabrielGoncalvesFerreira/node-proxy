@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { sessionService } from '../services/session.service.js';
 import { config } from '../config/env.js';
 import { csrfService } from '../services/csrf.service.js';
-import { extractSessionToken } from '../utils/session-token.js';
+import { extractSessionToken, clearSessionCookie } from '../utils/session-token.js';
 import { extractClientContext, hasSameClientContext } from '../utils/client-context.js';
 
 
@@ -68,6 +68,7 @@ export async function proxyPreHandler(req, reply) {
 
     if (!sessionId) {
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ message: 'Sessão não encontrada ou expirada.' });
     }
 
@@ -76,6 +77,7 @@ export async function proxyPreHandler(req, reply) {
     // Se não achou no Redis ou se a sessão ainda está no passo de MFA ("Pendente")
     if (!session || session.isPendingMfa) {
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ message: 'Sessão inválida. Faça login novamente.' });
     }
 
@@ -85,6 +87,7 @@ export async function proxyPreHandler(req, reply) {
       req.log.warn({ sessionId, storedContext, requestContext }, '[Session Guard] Bloqueio por fingerprint.');
       await sessionService.removeSession(sessionId);
       csrfService.clear(reply);
+      clearSessionCookie(reply);
       return reply.code(401).send({ message: 'Sessão bloqueada por alteração de dispositivo/IP.' });
     }
 
